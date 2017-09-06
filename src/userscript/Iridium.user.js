@@ -5,7 +5,6 @@
 // @description     YouTube with more freedom
 // @compatible      firefox
 // @compatible      chrome
-// @resource        iridium_css https://particlecore.github.io/Iridium/css/Iridium.css?v=0.2.2b
 // @icon            https://raw.githubusercontent.com/ParticleCore/Iridium/gh-pages/images/i-icon.png
 // @match           *://www.youtube.com/*
 // @exclude         *://www.youtube.com/tv*
@@ -15,27 +14,25 @@
 // @homepageURL     https://github.com/ParticleCore/Iridium
 // @supportURL      https://github.com/ParticleCore/Iridium/wiki
 // @contributionURL https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=UMVQJJFG4BFHW
-// @grant           GM_getValue
-// @grant           GM_setValue
-// @grant           GM_addStyle
-// @grant           GM_getResourceText
+// @grant           none
 // @noframes
 // ==/UserScript==
-(function () {
+(function Iridium () {
     "use strict";
 
     var iridium = {
 
-        inject: function () {
+        // Actual content script code
+        contentScript: function (settings) {
 
             var i18n;
             var modules;
             var iridium_api;
-            var is_userscript;
             var user_settings;
             var default_language;
             var send_settings_to_page;
             var receive_settings_from_page;
+            var is_injected = typeof iridium !== "object";
 
             default_language = {
                 language: "English (US)",
@@ -4075,7 +4072,7 @@
                     active_id = active_sidebar.dataset.section;
                     options_list = [];
 
-                    for (i = 0; i < modules.length; i++) {
+                    for (var i = 0; i < modules.length; i++) {
 
                         if (modules[i].options) {
 
@@ -4322,24 +4319,21 @@
                 },
                 saveSettings: function (single_setting) {
 
-                    var settings;
+                    if (is_injected) {
 
-                    if (single_setting in user_settings) {
-
-                        settings = user_settings[single_setting];
+                        window.dispatchEvent(new CustomEvent(receive_settings_from_page, {
+                            detail: {
+                                settings: user_settings,
+                            }
+                        }));
 
                     } else {
 
-                        settings = user_settings;
+                        iridium.saveSettings(user_settings);
 
                     }
 
-                    window.dispatchEvent(new CustomEvent(receive_settings_from_page, {
-                        detail: {
-                            settings: settings,
-                            single_setting: single_setting
-                        }
-                    }));
+                    this.updateSettingsOnOpenWindows();
 
                 },
                 initializeSettings: function (new_settings) {
@@ -4353,7 +4347,6 @@
                     if ((iridium_settings = document.getElementById("iridium-settings"))) {
 
                         loaded_settings = JSON.parse(iridium_settings.textContent || "null");
-                        is_userscript = !!iridium_settings.getAttribute("is-userscript");
                         receive_settings_from_page = iridium_settings.getAttribute("settings-beacon-from");
                         send_settings_to_page = iridium_settings.getAttribute("settings-beacon-to");
 
@@ -4497,9 +4490,15 @@
                     }
 
                 },
-                ini: function () {
+                updateSettingsOnOpenWindows: function () {
 
-                    this.initializeSettings();
+                        this.broadcast_channel.postMessage(user_settings);
+
+                },
+                ini: function (settings) {
+
+                    this.initializeSettings(settings);
+
 
                     this.broadcast_channel = new BroadcastChannel(user_settings.broadcast_id);
                     this.broadcast_channel.addEventListener("message", this.initializeBroadcast.bind(this));
@@ -4526,9 +4525,11 @@
 
             };
 
-            iridium_api.ini();
+            iridium_api.ini(settings);
 
         },
+
+        // Wrapper helpers
         isAllowedPage: function () {
 
             var current_page;
@@ -4570,65 +4571,52 @@
             });
 
         },
-        saveSettings: function () {
+        saveSettings: function (settings) {
 
             if (this.is_userscript) {
 
-                this.GM_setValue(this.id, JSON.stringify(this.user_settings));
+                window.localStorage[this.id] = JSON.stringify(settings);
 
             } else {
 
-                chrome.storage.local.set({iridiumSettings: this.user_settings});
+                chrome.storage.local.set({[this.id]: settings});
 
             }
 
         },
-        updateSettingsOnOpenWindows: function () {
+        initSettings: function (settings) {
+            if (!settings.broadcast_id) {
 
-            this.broadcast_channel.postMessage(this.user_settings);
+                settings.broadcast_id = this.generateUUID();
 
-        },
-        settingsUpdatedFromOtherWindow: function (event) {
-
-            if (event.data && event.data.broadcast_id === this.broadcast_channel.name) {
-
-                this.user_settings = event.data;
-
-                this.saveSettings();
+                this.saveSettings(settings);
 
             }
 
+            return settings;
         },
+
+        // Immediate Mode
+        main: function (settings) {
+
+            settings = this.initSettings(settings);
+
+            var style = document.createElement("link");
+            style.rel = "stylesheet";
+            style.type = "text/css";
+            style.href = "https://particlecore.github.io/Iridium/css/Iridium.css?v=0.2.2b";
+            document.documentElement.appendChild(style);
+
+            this.contentScript(settings);
+
+        },
+
+        // Injected Mode
         contentScriptMessages: function (custom_event) {
-
-            var key;
-            var locale_request;
-            var updated_settings;
 
             if ((updated_settings = custom_event.detail.settings) !== undefined) {
 
-                if (custom_event.detail.single_setting) {
-
-                    this.user_settings[custom_event.detail.single_setting] = custom_event.detail.settings;
-
-                } else if (this.is_settings_page && typeof updated_settings === "object") {
-
-                    for (key in updated_settings) {
-
-                        if (updated_settings.hasOwnProperty(key)) {
-
-                            this.user_settings = updated_settings;
-
-                            break;
-
-                        }
-
-                    }
-
-                }
-
-                this.saveSettings();
-                this.updateSettingsOnOpenWindows();
+                this.saveSettings(custom_event.detail.settings);
 
             } else if ((locale_request = custom_event.detail.locale)) {
 
@@ -4641,69 +4629,39 @@
             }
 
         },
-        main: function (event) {
+        injector: function (event) {
 
+            // Inject content script into page context from outside
             var holder;
+
+            var settings = this.initSettings(event[this.id] || event);
 
             this.receive_settings_from_page = this.generateUUID();
             this.send_settings_to_page = this.generateUUID();
 
             window.addEventListener(this.receive_settings_from_page, this.contentScriptMessages.bind(this));
 
-            if (!event && this.is_userscript) {
+            holder = document.createElement("iridium-settings");
+            holder.id = "iridium-settings";
+            holder.textContent = JSON.stringify(settings);
+            holder.setAttribute("style", "display: none");
+            holder.setAttribute("settings-beacon-from", this.receive_settings_from_page);
+            holder.setAttribute("settings-beacon-to", this.send_settings_to_page);
 
-                event = JSON.parse(this.GM_getValue(this.id, "{}"));
+            document.documentElement.appendChild(holder);
 
-            }
+            holder = document.createElement("script");
+            holder.textContent = "(" + this.contentScript + "())";
 
-            if (event) {
+            document.documentElement.appendChild(holder);
 
-                this.user_settings = event[this.id] || event;
-
-                if (!this.user_settings.broadcast_id) {
-
-                    this.user_settings.broadcast_id = this.generateUUID();
-
-                    this.saveSettings();
-
-                }
-
-                this.broadcast_channel = new BroadcastChannel(this.user_settings.broadcast_id);
-                this.broadcast_channel.addEventListener("message", this.settingsUpdatedFromOtherWindow.bind(this));
-
-                event = JSON.stringify(this.user_settings);
-
-                if (this.is_userscript) {
-
-                    holder = document.createElement("style");
-                    holder.textContent = GM_getResourceText("iridium_css");
-
-                    document.documentElement.appendChild(holder);
-
-                }
-
-                holder = document.createElement("iridium-settings");
-                holder.id = "iridium-settings";
-                holder.textContent = event;
-                holder.setAttribute("style", "display: none");
-                holder.setAttribute("is-userscript", this.is_userscript);
-                holder.setAttribute("settings-beacon-from", this.receive_settings_from_page);
-                holder.setAttribute("settings-beacon-to", this.send_settings_to_page);
-
-                document.documentElement.appendChild(holder);
-
-                holder = document.createElement("script");
-                holder.textContent = "(" + this.inject + "())";
-
-                document.documentElement.appendChild(holder);
-
-                holder.remove();
-                this.inject = null;
-                delete this.inject;
-
-            }
+            holder.remove();
+            this.contentScript = null;
+            delete this.contentScript;
 
         },
+
+        // Initialize
         ini: function () {
 
             if (this.isAllowedPage()) {
@@ -4717,13 +4675,17 @@
 
                 if (this.is_userscript) {
 
-                    this.GM_getValue = GM_getValue;
-                    this.GM_setValue = GM_setValue;
-                    this.main();
+                    var settings = {};
+                    var stor = window.localStorage[this.id];
+
+                    if (stor)
+                        settings = JSON.parse(stor);
+
+                    this.main(settings);
 
                 } else {
 
-                    chrome.storage.local.get(this.id, this.main);
+                    chrome.storage.local.get(this.id, this.injector);
 
                 }
 
