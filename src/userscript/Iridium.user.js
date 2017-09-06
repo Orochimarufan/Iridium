@@ -2495,8 +2495,16 @@
                             }
 
                             this.quickControlsState();
-                            this.quickControlsStateListener = this.quickControlsState.bind(this);
-                            iridium_api.broadcast_channel.addEventListener("message", this.quickControlsStateListener);
+
+                            if (this.broadcast_channel) {
+
+                                // Check for settings changes in other tabs
+                                // FIXME: pretty sure this is a race condition, since user_settings
+                                //           may not be updated yet
+                                this.quickControlsStateListener = this.quickControlsState.bind(this);
+                                iridium_api.broadcast_channel.addEventListener("message", this.quickControlsStateListener);
+
+                            }
 
                             this.quickControlsListener = this.quickControls.bind(this);
                             document.addEventListener("click", this.quickControlsListener, false);
@@ -3460,8 +3468,15 @@
 
                         }
 
-                        this.toggleHideCardsListener = this.toggleHideCards.bind(this);
-                        iridium_api.broadcast_channel.addEventListener("message", this.toggleHideCardsListener);
+                        if (this.broadcast_channel) {
+
+                            // Check for settings changes in other tabs
+                            // FIXME: pretty sure this is a race condition, since user_settings
+                            //           may not be updated yet
+                            this.toggleHideCardsListener = this.toggleHideCards.bind(this);
+                            iridium_api.broadcast_channel.addEventListener("message", this.toggleHideCardsListener);
+
+                        }
 
                     }
                 },
@@ -3773,7 +3788,49 @@
                         about: {
                             id: "about",
                             section: "about",
-                            type: "custom"
+                            type: "custom",
+                            custom: function () {
+
+                                function el(t, x, c) {
+
+                                    var e = document.createElement(t);
+
+                                    if (typeof x === "function") {
+                                        x(e);
+                                    } else {
+                                        e.textContent = x;
+                                    }
+
+                                    if (c) {
+                                        for (var i = 0; i < c.length; i++) {
+                                            e.appendChild(c[i]);
+                                        }
+                                    }
+
+                                    return e;
+
+                                }
+
+                                return [
+                                    el("h2", "Browser Info"),
+                                    el("br"),
+                                    el("table", e => {e.className = "setting"; e.style = "table-layout:fixed; width: 80%";}, [
+                                        el("tr", null, [
+                                            el("th", "Browser"),
+                                            el("td", e => {e.style = "word-wrap:break-word; white-space:pre-wrap";}, [
+                                                el("div", navigator.userAgent)])]),
+                                        el("tr", null, [
+                                            el("th", "Running as userscript"),
+                                            el("td", typeof GM_info === "object"? (
+                                                "Yes (" + (is_injected? "Injected; " : "") + GM_info.scriptHandler + " " + GM_info.version + ")") :
+                                                "No (" + (is_injected? "Injected" : "Immediate") + ")")]),
+                                        el("tr", null, [
+                                            el("th", "Supports BroadcastChannel"),
+                                            el("td", iridium_api.broadcast_channel? "Yes" : "No")]),
+                                    ]),
+                                ];
+
+                            }
                         }
                     }
                 }
@@ -3946,7 +4003,11 @@
 
                         option = options_list[i];
 
-                        if (!(sub_section = document.getElementById(i18n.sub_section_titles[option.sub_section]))) {
+                        if (!option.sub_section) {
+
+                            sub_section = section;
+
+                        } else if (!(sub_section = document.getElementById(i18n.sub_section_titles[option.sub_section]))) {
 
                             sub_section = document.createElement("div");
                             sub_section.id = i18n.sub_section_titles[option.sub_section];
@@ -4268,6 +4329,18 @@
 
                     }
 
+                    if (!this.broadcast_channel) {
+
+                        var e = document.createElement("div");
+                        e.textContent = ("Your browser does not support the BroadcastChannel Web API. " +
+                                        "Iridium cannot update other tabs without it. " +
+                                        "You will have to reload any existing YouTube tabs for changes to take effect.");
+                        e.style = "background-color: orange; border-radius: 2px; color: black;";
+                        var container = document.getElementById("iridium_settings_container");
+                        container.insertBefore(e, container.firstChild);
+
+                    }
+
                     document.removeEventListener("click", iridium_api.updateSidebarSelection);
                     document.addEventListener("click", iridium_api.updateSidebarSelection);
 
@@ -4492,16 +4565,28 @@
                 },
                 updateSettingsOnOpenWindows: function () {
 
+                    if (this.broadcast_channel) {
+
                         this.broadcast_channel.postMessage(user_settings);
+
+                    }
 
                 },
                 ini: function (settings) {
 
                     this.initializeSettings(settings);
 
+                    if (typeof BroadcastChannel !== "undefined") {
 
-                    this.broadcast_channel = new BroadcastChannel(user_settings.broadcast_id);
-                    this.broadcast_channel.addEventListener("message", this.initializeBroadcast.bind(this));
+                        this.broadcast_channel = new BroadcastChannel(user_settings.broadcast_id);
+                        this.broadcast_channel.addEventListener("message", this.initializeBroadcast.bind(this));
+
+                    } else {
+
+                        this.broadcast_channel = null;
+                        console.warn("Browser doesn't support BroadcastChannel; cannot sync settings between tabs.");
+
+                    }
 
                     document.documentElement.addEventListener("load", this.initializeSettingsButton, true);
 
