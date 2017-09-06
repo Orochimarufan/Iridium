@@ -2496,7 +2496,7 @@
 
                             this.quickControlsState();
 
-                            if (this.broadcast_channel) {
+                            if (iridium_api.broadcast_channel) {
 
                                 // Check for settings changes in other tabs
                                 // FIXME: pretty sure this is a race condition, since user_settings
@@ -3468,7 +3468,7 @@
 
                         }
 
-                        if (this.broadcast_channel) {
+                        if (iridium_api.broadcast_channel) {
 
                             // Check for settings changes in other tabs
                             // FIXME: pretty sure this is a race condition, since user_settings
