@@ -1,5 +1,5 @@
 // ==UserScript==
-// @version         0.2.2b
+// @version         0.2.9b
 // @name            Iridium
 // @namespace       https://github.com/ParticleCore
 // @description     YouTube with more freedom
@@ -112,13 +112,40 @@
 
                         var url;
                         var data;
+                        var parent;
+                        var target;
 
-                        if ((data = event.target.data) && (url = data.webNavigationEndpointData && data.webNavigationEndpointData.url)) {
+                        target = event.target;
+
+                        if (!(data = target.data)) {
+
+                            parent = target.parentNode;
+
+                            while (parent) {
+
+                                if (parent.data) {
+                                    target = parent;
+                                    data = target.data;
+                                    break;
+                                }
+
+                                parent = parent.parentNode;
+
+                            }
+
+                        }
+
+                        if (data && (url = data.webNavigationEndpointData && data.webNavigationEndpointData.url)) {
 
                             if (user_settings.default_channel_tab !== "home" && url.match(/^\/(?:channel|user)\/(?:[^\/])+$/)) {
 
                                 data.webNavigationEndpointData.url += "/" + user_settings.default_channel_tab;
-                                event.target.href = data.webNavigationEndpointData.url;
+
+                                if (target.href) {
+
+                                    target.href = data.webNavigationEndpointData.url;
+
+                                }
 
                             }
 
@@ -841,37 +868,15 @@
                         }
 
                     },
-                    checkParse: function (original) {
+                    modOnDone: function (original) {
 
                         var context = this;
 
-                        return function (text, reviver, bypass) {
+                        return function(data) {
 
-                            var temp;
+                            context.clearList(data);
 
-                            try {
-
-                                temp = original.apply(this, arguments);
-
-                                if (!user_settings.enable_blacklist) {
-
-                                    return temp;
-
-                                }
-
-                                if (!bypass && context.allowedBlacklistPage()) {
-
-                                    context.clearList(temp);
-
-                                }
-
-                                return temp;
-
-                            } catch (e) {
-
-                                return e;
-
-                            }
+                            return original.apply(this, arguments);
 
                         };
 
@@ -1206,25 +1211,42 @@
                         document.addEventListener("yt-page-data-fetched", this.iniBlacklist.bind(this), false);
                         document.addEventListener("click", this.addToBlacklist.bind(this), true);
 
-                        JSON.parse = this.checkParse(JSON.parse);
                         HTMLDocument.prototype.importNode = this.modImportNode(HTMLDocument.prototype.importNode);
 
                         context = this;
 
-                        Object.defineProperty(Object.prototype, "ytInitialData", {
-                            set: function (data) {
-                                this._ytInitialData = data;
-                            },
-                            get: function () {
+                        Object.defineProperties(Object.prototype, {
+                            ytInitialData: {
+                                set: function (data) {
+                                    this._ytInitialData = data;
+                                },
+                                get: function () {
 
-                                if (user_settings.enable_blacklist && context.allowedBlacklistPage()) {
+                                    if (user_settings.enable_blacklist && context.allowedBlacklistPage()) {
 
-                                    context.clearList(this._ytInitialData);
+                                        context.clearList(this._ytInitialData);
+
+                                    }
+
+                                    return this._ytInitialData;
 
                                 }
+                            },
+                            onDone: {
+                                set: function (data) {
+                                    this._onDone = data;
+                                },
+                                get: function () {
 
-                                return this._ytInitialData;
+                                    if (user_settings.enable_blacklist && context.allowedBlacklistPage()) {
 
+                                        return context.modOnDone(this._onDone);
+
+                                    }
+
+                                    return this._onDone;
+
+                                }
                             }
                         });
 
@@ -1697,6 +1719,16 @@
                                 screen_shot_title: "Right click for options",
                                 full_browser_info: "Press \"Esc\" to exit"
                             }
+                        },
+                        player_max_res_thumbnail: {
+                            id: "player_max_res_thumbnail",
+                            section: "video",
+                            sub_section: "player",
+                            type: "checkbox",
+                            value: true,
+                            i18n: {
+                                label: "Force high quality player thumbnail"
+                            }
                         }
                     },
                     modArgs: function (args) {
@@ -1706,10 +1738,22 @@
                         var list;
                         var key_type;
                         var player_response;
+                        var thumbnail_image;
+
+                        if (this.isChannel() ? !user_settings.channel_trailer_auto_play : !user_settings.player_auto_play) {
+
+                            args.autoplay = "0";
+
+                        }
 
                         if (user_settings.player_max_res_thumbnail && args.thumbnail_url) {
 
                             args.iurlmaxres = args.thumbnail_url.replace(/\/[^\/]+$/, "/maxresdefault.jpg");
+
+                            thumbnail_image = new Image();
+                            thumbnail_image.addEventListener("load", this.checkHighQualityThumbnail.bind(this, args.iurlmaxres), false);
+                            thumbnail_image.src = args.iurlmaxres;
+                            thumbnail_image = null;
 
                         }
 
@@ -1717,12 +1761,16 @@
 
                             delete args.ad3_module;
 
-                            player_response = JSON.parse(args.player_response);
+                            if (args.player_response) {
 
-                            if (player_response && player_response.adPlacements) {
+                                player_response = JSON.parse(args.player_response);
 
-                                delete player_response.adPlacements;
-                                args.player_response = JSON.stringify(player_response);
+                                if (player_response && player_response.adPlacements) {
+
+                                    delete player_response.adPlacements;
+                                    args.player_response = JSON.stringify(player_response);
+
+                                }
 
                             }
 
@@ -1752,7 +1800,7 @@
 
                         if (!user_settings.player_subtitles) {
 
-                            window.localStorage.setItem(
+                            iridium_api.setStorage(
                                 "yt-html5-player-modules::subtitlesModuleData::module-enabled",
                                 "false"
                             );
@@ -1808,9 +1856,11 @@
 
                             if (current_config && current_config.args) {
 
+                                context.updatePlayerLayout = !!current_config.args.list !== !!args.list;
+
                                 if ((current_config.args.eventid === args.eventid || current_config.args.loaderUrl === args.loaderUrl)) {
 
-                                    if (!document.querySelector(".ended-mode") && (current_video_id = window.location.href.match(iridium_api.videoIdPattern))) {
+                                    if (!document.querySelector(".ended-mode,.unstarted-mode") && (current_video_id = window.location.href.match(iridium_api.videoIdPattern))) {
 
                                         if (current_video_id[1] === current_config.args.video_id) {
 
@@ -1902,54 +1952,6 @@
                         };
 
                     },
-                    patchXHR: function (event) {
-
-                        var i;
-                        var temp;
-                        var temp_list;
-                        var key_value;
-                        var player_api;
-
-                        if (event.target.readyState === 4 && event.target.responseText.match(/eventid=/)) {
-
-                            temp_list = {};
-                            temp = event.target.responseText.split("&");
-
-                            for (i = 0; i < temp.length; i++) {
-
-                                key_value = temp[i].split("=");
-                                temp_list[key_value[0]] = key_value[1] || "";
-
-                            }
-
-                            this.modArgs(temp_list);
-
-                            Object.defineProperty(event.target, "responseText", {writable: true});
-
-                            event.target.responseText = "";
-                            temp = Object.keys(temp_list);
-
-                            for (i = 0; i < temp.length; i++) {
-
-                                event.target.responseText += temp[i] + "=" + temp_list[temp[i]];
-
-                                if (i + 1 < temp.length) {
-
-                                    event.target.responseText += "&";
-
-                                }
-
-                            }
-
-                            if (user_settings.player_quality !== "auto" && (player_api = document.getElementById("movie_player"))) {
-
-                                player_api.setPlaybackQuality(user_settings.player_quality);
-
-                            }
-
-                        }
-
-                    },
                     modOpen: function (original) {
 
                         var context = this;
@@ -2001,6 +2003,95 @@
                             return original.apply(this, arguments);
 
                         };
+
+                    },
+                    checkHighQualityThumbnail: function (thumbnail_url, event) {
+
+                        var style_element;
+                        var thumbnail_container;
+
+                        if (event.target.width < 121 && (thumbnail_container = document.querySelector(".ytp-cued-thumbnail-overlay-image"))) {
+
+                            if (!(style_element = document.getElementById("style-thumbnail"))) {
+
+                                style_element = document.createElement("style");
+                                style_element.id = "style-thumbnail";
+
+                                thumbnail_container.parentNode.insertBefore(style_element, thumbnail_container);
+
+                            }
+
+                            style_element.textContent =
+                                ".ytp-cued-thumbnail-overlay-image {" +
+                                "    background-image:url('" + thumbnail_url.replace("maxresdefault", "sddefault") + "') !important;" +
+                                "}";
+
+                        } else if ((style_element = document.getElementById("style-thumbnail"))) {
+
+                            style_element.textContent = "";
+
+                        }
+
+                    },
+                    patchXHR: function (event) {
+
+                        var i;
+                        var temp;
+                        var temp_list;
+                        var key_value;
+                        var player_api;
+
+                        if (event.target.readyState === 4 && event.target.responseText.match(/eventid=/)) {
+
+                            temp_list = {};
+                            temp = event.target.responseText.split("&");
+
+                            for (i = 0; i < temp.length; i++) {
+
+                                key_value = temp[i].split("=");
+                                temp_list[key_value[0]] = window.decodeURIComponent(key_value[1]) || "";
+
+                            }
+
+                            this.modArgs(temp_list);
+
+                            Object.defineProperty(event.target, "responseText", {writable: true});
+
+                            event.target.responseText = "";
+                            temp = Object.keys(temp_list);
+
+                            for (i = 0; i < temp.length; i++) {
+
+                                event.target.responseText += temp[i] + "=" + window.encodeURIComponent(temp_list[temp[i]]);
+
+                                if (i + 1 < temp.length) {
+
+                                    event.target.responseText += "&";
+
+                                }
+
+                            }
+
+                            if (user_settings.player_quality !== "auto" && (player_api = document.getElementById("movie_player"))) {
+
+                                player_api.setPlaybackQuality(user_settings.player_quality);
+
+                            }
+
+                        }
+
+                    },
+                    interceptHooks: function (event) {
+
+                        if (iridium_api.checkIfExists("yt.player.Application.create")) {
+
+                            window.yt.player.Application.create = this.modPlayerLoad(window.yt.player.Application.create);
+
+                            document.documentElement.removeEventListener("load", this.fileLoadListener, true);
+
+                            this.fileLoadListener = null;
+
+                        }
 
                     },
                     handleCustoms: function (event) {
@@ -2079,7 +2170,7 @@
 
                                 timestamp = Date.now();
 
-                                window.localStorage.setItem(
+                                iridium_api.setStorage(
                                     "yt-player-volume",
                                     JSON.stringify({
                                         data: JSON.stringify({
@@ -2093,7 +2184,7 @@
 
                             }
 
-                            if (user_settings.player_memorize_size && (watch_page_api = document.querySelector("ytd-watch"))) {
+                            if (user_settings.player_memorize_size && window.location.pathname === "/watch" && (watch_page_api = document.querySelector("ytd-watch"))) {
 
                                 try {
 
@@ -2429,22 +2520,18 @@
                         }
 
                     },
-                    loadStart: function () {
+                    loadStart: function (event) {
 
+                        var is_watch;
+                        var is_playlist;
                         var meta_section;
                         var quick_controls;
+                        var yt_player_manager;
 
                         if (this.quickControlsListener) {
 
                             document.removeEventListener("click", this.quickControlsListener, false);
                             this.quickControlsListener = null;
-
-                        }
-
-                        if (this.quickControlsStateListener) {
-
-                            iridium_api.broadcast_channel.removeEventListener("message", this.quickControlsStateListener);
-                            this.quickControlsStateListener = null;
 
                         }
 
@@ -2496,17 +2583,8 @@
 
                             this.quickControlsState();
 
-                            if (iridium_api.broadcast_channel) {
-
-                                // Check for settings changes in other tabs
-                                // FIXME: pretty sure this is a race condition, since user_settings
-                                //           may not be updated yet
-                                this.quickControlsStateListener = this.quickControlsState.bind(this);
-                                iridium_api.broadcast_channel.addEventListener("message", this.quickControlsStateListener);
-
-                            }
-
                             this.quickControlsListener = this.quickControls.bind(this);
+
                             document.addEventListener("click", this.quickControlsListener, false);
 
                         } else if (quick_controls && !user_settings.player_quick_controls) {
@@ -2515,14 +2593,69 @@
 
                         }
 
+                        if (event) {
+
+                            is_watch = window.location.pathname === "/watch";
+                            is_playlist = !!window.location.search.match(/list=[A-Z]{2}/);
+
+                            switch (event.type) {
+
+                                case "popstate":
+                                case "yt-navigate-start":
+
+                                    if (!user_settings.player_auto_play) {
+
+                                        if (is_watch && this.previous_url !== window.location.href && (is_watch !== this.was_watch || is_playlist !== this.was_playlist)) {
+
+                                            if ((yt_player_manager = document.querySelector("yt-player-manager")) && yt_player_manager["playerContainer_"]) {
+
+                                                yt_player_manager["playerContainer_"] = undefined;
+
+                                            }
+
+                                        }
+
+                                    }
+
+                                    break;
+
+                            }
+
+                            this.previous_url = is_watch ? window.location.href : this.previous_url;
+                            this.was_watch = is_watch;
+                            this.was_playlist = is_playlist;
+
+                        }
+
+                    },
+                    onSettingsUpdated: function () {
+
+                        this.quickControlsState();
+
                     },
                     ini: function () {
 
                         var context;
+                        var timestamp;
 
                         if (iridium_api.initializeOption.call(this)) {
 
                             return;
+
+                        }
+
+                        if (user_settings.player_quality !== "auto") {
+
+                            timestamp = Date.now();
+
+                            iridium_api.setStorage(
+                                "yt-player-quality",
+                                JSON.stringify({
+                                    data: user_settings.player_quality,
+                                    creation: timestamp,
+                                    expiration: timestamp + 2592E6
+                                })
+                            );
 
                         }
 
@@ -2531,19 +2664,34 @@
                             window.removeEventListener("yt-page-data-updated", this.loadStartListener, true);
                             window.removeEventListener("yt-navigate-start", this.loadStartListener, false);
                             window.removeEventListener("yt-navigate-finish", this.loadStartListener, false);
-                            this.loadStartListener = null;
+                            window.removeEventListener("popstate", this.loadStartListener, true);
 
                         }
 
                         this.loadStartListener = this.loadStart.bind(this);
+
                         window.addEventListener("yt-page-data-updated", this.loadStartListener, true);
                         window.addEventListener("yt-navigate-start", this.loadStartListener, false);
                         window.addEventListener("yt-navigate-finish", this.loadStartListener, false);
+                        window.addEventListener("popstate", this.loadStartListener, true);
+
+                        if (this.fileLoadListener) {
+
+                            document.documentElement.removeEventListener("load", this.fileLoadListener, true);
+
+                        }
+
+                        this.fileLoadListener = this.interceptHooks.bind(this);
+
+                        document.documentElement.addEventListener("load", this.fileLoadListener, true);
+
                         window.matchMedia = this.modMatchMedia(window.matchMedia);
                         window.onYouTubePlayerReady = this.shareApi(window.onYouTubePlayerReady);
                         JSON.parse = this.modJSONParse(JSON.parse);
                         XMLHttpRequest.prototype.open = this.modOpen(XMLHttpRequest.prototype.open);
                         DOMParser.prototype.parseFromString = this.modParseFromString(DOMParser.prototype.parseFromString);
+
+                        this.interceptHooks();
 
                         context = this;
 
@@ -2606,41 +2754,21 @@
 
                                 }
                             },
-                            loaded: {
+                            playVideo: {
                                 set: function (data) {
-                                    this._loaded = data;
+                                    this._playVideo = data;
                                 },
                                 get: function () {
 
-                                    if (this.args && (context.isChannel() ? !user_settings.channel_trailer_auto_play : !user_settings.player_auto_play)) {
+                                    if (context.isChannel() ? !user_settings.channel_trailer_auto_play : !user_settings.player_auto_play) {
 
-                                        return false;
-
-                                    }
-
-                                    return this._loaded;
-
-                                }
-
-                            },
-                            load: {
-                                set: function (data) {
-                                    this._load = data;
-                                },
-                                get: function () {
-
-                                    var temp = this._load && this._load.toString();
-
-                                    if (temp && temp.match(/Application.create/)) {
-
-                                        window.yt.player.Application.create = context.modPlayerLoad(window.yt.player.Application.create);
+                                        return function () {};
 
                                     }
 
-                                    return this._load;
+                                    return this._playVideo;
 
                                 }
-
                             },
                             isMobile: {
                                 set: function (data) {
@@ -2681,7 +2809,6 @@
                                     return this._isMobile;
 
                                 }
-
                             }
                         });
 
@@ -2689,20 +2816,130 @@
                 },
                 {
                     options: {
-                        player_max_res_thumbnail: {
-                            id: "player_max_res_thumbnail",
+                        comments_visibility: {
+                            id: "comments_visibility",
                             section: "video",
-                            sub_section: "player",
-                            type: "checkbox",
-                            value: true,
+                            sub_section: "general",
+                            type: "dropdown",
+                            value: 1,
                             i18n: {
-                                label: "Force high quality player thumbnail"
-                            }
+                                label: "Comment section:",
+                                button_show_comments: "Show comments",
+                                options: [
+                                    "Show",
+                                    "Hide",
+                                    "Remove"
+                                ]
+                            },
+                            options: [
+                                0,
+                                1,
+                                2
+                            ]
                         }
+                    },
+                    modOnShow: function (original) {
+
+                        return function (bypass) {
+
+                            var comments_loaded;
+                            var comment_contents;
+
+                            if (user_settings.comments_visibility > 1) {
+
+                                return function () {};
+
+                            }
+
+                            comments_loaded = (comment_contents = document.querySelector("ytd-comments #contents")) && !!comment_contents.firstElementChild;
+
+                            if (bypass || comments_loaded || user_settings.comments_visibility < 1) {
+
+                                return original.apply(this, arguments);
+
+                            }
+
+                            return function () {};
+
+                        };
+
+                    },
+                    iniLoadComments: function (event) {
+
+                        var comment_section = document.querySelector("ytd-comments yt-next-continuation");
+
+                        event.target.remove();
+
+                        if (comment_section) {
+
+                            comment_section.onShow(true);
+
+                        }
+
+                    },
+                    iniLoadCommentsButton: function () {
+
+                        var button;
+                        var comment_section;
+
+                        button = document.getElementById("iri-show-comments");
+
+                        if (!button && (comment_section = document.querySelector("ytd-comments"))) {
+
+                            button = document.createElement("div");
+                            button.id = "iri-show-comments";
+                            button.textContent = i18n.comments_visibility.button_show_comments;
+                            button.addEventListener("click", this.iniLoadComments.bind(this), false);
+
+                            comment_section.insertBefore(button, comment_section.firstChild);
+
+                        }
+
+                    },
+                    iniLoadStartListener: function () {
+
+                        var button;
+                        var comment_section;
+                        var comment_contents;
+
+                        if (user_settings.comments_visibility > 0) {
+
+                            if (!((comment_contents = document.querySelector("ytd-comments #contents")) && comment_contents.firstElementChild)) {
+
+                                if ((comment_section = document.querySelector("ytd-comments yt-next-continuation"))) {
+
+                                    if (comment_section.onShow) {
+
+                                        comment_section.onShow = this.modOnShow(comment_section.onShow);
+
+                                    }
+
+                                    if (user_settings.comments_visibility < 2) {
+
+                                        this.iniLoadCommentsButton();
+
+                                    }
+
+                                }
+
+                            } else if (comment_contents.firstElementChild && (button = document.getElementById("iri-show-comments"))) {
+
+                                button.remove();
+
+                            }
+
+                        }
+
                     },
                     ini: function () {
 
-                        iridium_api.initializeOption.call(this);
+                        if (iridium_api.initializeOption.call(this)) {
+
+                            return;
+
+                        }
+
+                        window.addEventListener("yt-visibility-refresh", this.iniLoadStartListener.bind(this), true);
 
                     }
                 },
@@ -2869,7 +3106,7 @@
 
                                 timestamp = Date.now();
 
-                                window.localStorage.setItem(
+                                iridium_api.setStorage(
                                     "yt-player-volume",
                                     JSON.stringify({
                                         data: JSON.stringify({
@@ -3207,7 +3444,12 @@
 
                             is_in_theater_mode = document.querySelector("ytd-watch[theater]");
 
-                            player_api.removeAttribute("style");
+                            if (!document.querySelector(".iri-always-visible,.iri-always-playing")) {
+
+                                player_api.removeAttribute("style");
+
+                            }
+
                             player_api.setSizeStyle(true, is_in_theater_mode);
 
                             if (this.setMiniPlayerSizeListener) {
@@ -3284,7 +3526,7 @@
 
                         } else if (window.location.pathname === "/watch") {
 
-                            if ((player_container = document.getElementById("player-container")) && (player_bounds = player_container.getBoundingClientRect())) {
+                            if ((player_container = document.querySelector("#player #player-container")) && (player_bounds = player_container.getBoundingClientRect())) {
 
                                 is_out_of_sight = player_bounds.bottom < ((player_bounds.height / 2) + 50);
 
@@ -3317,7 +3559,7 @@
 
                             this.endMiniPlayer("iri-always-playing");
 
-                        } else if (document.querySelector(".paused-mode,.playing-mode")) {
+                        } else if (document.querySelector(".playing-mode")) {
 
                             this.iniMiniPlayer("iri-always-playing");
 
@@ -3390,6 +3632,14 @@
                         };
 
                     },
+                    onSettingsUpdated: function () {
+
+                        this.move_data.player_position.X = user_settings.miniPlayer.position.X;
+                        this.move_data.player_position.Y = user_settings.miniPlayer.position.Y;
+
+                        this.updatePlayerPosition();
+
+                    },
                     ini: function () {
 
                         var context;
@@ -3407,9 +3657,7 @@
 
                         window.addEventListener("scroll", always_visible_listener, false);
                         window.addEventListener("popstate", always_playing_listener, true);
-                        window.addEventListener("yt-navigate-start", always_visible_listener, false);
                         window.addEventListener("yt-navigate-finish", always_visible_listener, false);
-                        window.addEventListener("yt-navigate-start", always_playing_listener, false);
                         window.addEventListener("yt-navigate-finish", always_playing_listener, false);
 
                         context = this;
@@ -3422,6 +3670,7 @@
                                 return context.modStopVideo(this._stopVideo);
                             }
                         });
+
 
                     }
                 },
@@ -3451,6 +3700,11 @@
                         }
 
                     },
+                    onSettingsUpdated: function () {
+
+                        this.toggleHideCards();
+
+                    },
                     ini: function () {
 
                         if (iridium_api.initializeOption.call(this)) {
@@ -3460,23 +3714,6 @@
                         }
 
                         this.toggleHideCards();
-
-                        if (this.toggleHideCardsListener) {
-
-                            iridium_api.broadcast_channel.removeEventListener("message", this.toggleHideCardsListener);
-                            this.toggleHideCardsListener = null;
-
-                        }
-
-                        if (iridium_api.broadcast_channel) {
-
-                            // Check for settings changes in other tabs
-                            // FIXME: pretty sure this is a race condition, since user_settings
-                            //           may not be updated yet
-                            this.toggleHideCardsListener = this.toggleHideCards.bind(this);
-                            iridium_api.broadcast_channel.addEventListener("message", this.toggleHideCardsListener);
-
-                        }
 
                     }
                 },
@@ -3839,6 +4076,11 @@
             iridium_api = {
 
                 videoIdPattern: /v=([\w-_]+)/,
+                setStorage: function (id, value) {
+
+                    try {window.localStorage.setItem(id, value);} catch (ignore) {}
+
+                },
                 checkIfExists: function (path, host) {
 
                     var i;
@@ -4066,7 +4308,7 @@
                                     options.value = option.options[j];
                                     options.textContent = i18n[option.id].options[j];
 
-                                    if (user_settings[option.id] === options.value) {
+                                    if (user_settings[option.id] === option.options[j]) {
 
                                         options.setAttribute("selected", "true");
 
@@ -4494,10 +4736,24 @@
                     }
 
                 },
+                initializeModulesUpdate: function () {
+
+                    var i;
+
+                    for (i = 0; i < modules.length; i++) {
+
+                        if (modules[i].onSettingsUpdated) {
+
+                            modules[i].onSettingsUpdated();
+
+                        }
+
+                    }
+
+                },
                 initializeModules: function () {
 
                     var i;
-                    var timestamp;
 
                     for (i = 0; i < modules.length; i++) {
 
@@ -4506,21 +4762,6 @@
                             modules[i].ini();
 
                         }
-
-                    }
-
-                    if (user_settings.player_quality !== "auto") {
-
-                        timestamp = Date.now();
-
-                        window.localStorage.setItem(
-                            "yt-player-quality",
-                            JSON.stringify({
-                                data: user_settings.player_quality,
-                                creation: timestamp,
-                                expiration: timestamp + 2592E6
-                            })
-                        );
 
                     }
 
@@ -4559,6 +4800,7 @@
                     if (event.data && event.data.broadcast_id === this.broadcast_channel.name) {
 
                         this.initializeSettings(event.data);
+                        this.initializeModulesUpdate();
 
                     }
 
@@ -4689,7 +4931,7 @@
             var style = document.createElement("link");
             style.rel = "stylesheet";
             style.type = "text/css";
-            style.href = "https://particlecore.github.io/Iridium/css/Iridium.css?v=0.2.2b";
+            style.href = "https://particlecore.github.io/Iridium/css/Iridium.css?v=0.2.9b";
             document.documentElement.appendChild(style);
 
             this.contentScript(settings);
