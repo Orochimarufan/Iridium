@@ -24,6 +24,7 @@
 
         // Actual content script code
         contentScript: function (settings) {
+            "use strict";
 
             var i18n;
             var modules;
@@ -1610,7 +1611,7 @@
                             type: "checkbox",
                             value: false,
                             i18n: {
-                                label: "Play videos automatically"
+                                label: "Play videos automatically (disabling is currently broken on first visit)"
                             }
                         },
                         channel_trailer_auto_play: {
@@ -2776,6 +2777,7 @@
                                 },
                                 get: function isMobileGetter() {
 
+                                    /* FIXME: Not possible in strict mode
                                     var i;
                                     var matching;
                                     var keys_list;
@@ -2805,6 +2807,7 @@
                                         }
 
                                     }
+                                    */
 
                                     return this._isMobile;
 
