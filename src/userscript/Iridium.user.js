@@ -3634,8 +3634,12 @@
                     },
                     onSettingsUpdated: function () {
 
-                        this.move_data.player_position.X = user_settings.miniPlayer.position.X;
-                        this.move_data.player_position.Y = user_settings.miniPlayer.position.Y;
+                        if (user_settings.miniPlayer) {
+
+                            this.move_data.player_position.X = user_settings.miniPlayer.position.X;
+                            this.move_data.player_position.Y = user_settings.miniPlayer.position.Y;
+
+                        }
 
                         this.updatePlayerPosition();
 
